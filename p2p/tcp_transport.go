@@ -33,6 +33,7 @@ type TCPTransportOpts struct {
 	ListenAddr    string
 	HandshakeFunc HandshakeFunc
 	Decoder       Decoder
+	OnPeer        func(Peer) error  
 }
 
 type TCPTransport struct {
@@ -50,14 +51,12 @@ func NewTCPTransport(opts TCPTransportOpts) *TCPTransport {
 	}
 }
 
-
 // Consume implements the transport interface, which'll return-only channel
 // for reading the incoming message received from another peer in the network.
 
-func (t *TCPTransport) Consume() <-chan RPC{
+func (t *TCPTransport) Consume() <-chan RPC {
 	return t.rpcch
 }
-
 
 func (t *TCPTransport) ListenAndAccept() error {
 	var err error
@@ -87,27 +86,36 @@ func (t *TCPTransport) startAcceptLoop() {
 
 func (t *TCPTransport) handleConn(conn net.Conn) {
 	// defer conn.Close()
-
+	var err error
 	peer := NewTCPPeer(conn, false)
 
-	if err := t.HandshakeFunc(peer); err != nil {
+	defer func() {
+		fmt.Printf("Dropping peer connection : %s",err)
 		conn.Close()
-		fmt.Printf("TCP handshake error: %s\n", err)
+	}()
+
+	if err := t.HandshakeFunc(peer); err != nil {
 		return
+	}
+
+	if t.OnPeer != nil {
+		if err = t.OnPeer(peer); err!=nil {
+			return
+		}
 	}
 
 	// read loop
 	rpc := RPC{}
 
 	for {
-		if err := t.Decoder.Decode(conn, &rpc); err != nil {
-			fmt.Printf("TCP error: %s\n", err)
-			break
+		err := t.Decoder.Decode(conn, &rpc); 
+		if err != nil {
+			return
 		}
 
 		rpc.From = conn.RemoteAddr()
 
-		fmt.Printf("message: %+v\n", rpc)
+		t.rpcch <- rpc
 	}
 
 }
